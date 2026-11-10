@@ -128,7 +128,7 @@ jobs:
   test:
     name: Test ${{ matrix.platform.name }} py${{ matrix.python }}
     needs: [resolve, build-linux, build-hosted]
-    if: always() && needs.resolve.outputs.build == 'true' && needs.build-hosted.result == 'success'
+    if: always() && needs.resolve.outputs.build == 'true'
     runs-on: ${{ matrix.platform.runner }}
     timeout-minutes: 30
     strategy:

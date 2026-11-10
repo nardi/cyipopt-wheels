@@ -53,7 +53,8 @@ runs:
         printf '%s\n' \
           "project('ipopt-fetch', 'c')" \
           "dependency('Ipopt_jll')" \
-          "dependency('OpenBLAS_jll')" > "${fetch_directory}/meson.build"
+          "dependency('OpenBLAS_jll')" \
+          "dependency('CompilerSupportLibraries_jll')" > "${fetch_directory}/meson.build"
 
         (
           cd "${fetch_directory}"
