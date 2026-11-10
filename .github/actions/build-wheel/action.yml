@@ -1,8 +1,8 @@
 name: Build cyipopt wheel
 description: >-
-  Installs Ipopt from conda-forge, builds one cyipopt wheel from its PyPI sdist,
-  and bundles the shared libraries into the wheel. The Python on PATH builds the
-  wheel, so set it up before using this action.
+  Obtains Ipopt, builds one cyipopt wheel from its PyPI sdist, and bundles the
+  shared libraries into the wheel. The Python on PATH builds the wheel, so set
+  it up before using this action.
 inputs:
   version:
     description: "cyipopt version to build from its sdist on PyPI."
@@ -10,37 +10,86 @@ inputs:
 runs:
   using: composite
   steps:
-    # Installs Ipopt and pkg-config into a prefix of their own, so that the
-    # build links against conda-forge libraries and not against system files.
+    # Obtains Ipopt and its dependencies from the Julia binary builders with
+    # meson-jll. Meson fetches the tarballs and installs the runtime libraries
+    # into the prefix below, which is the layout the wheel repair tools read.
+    - name: Fetch Ipopt with meson-jll
+      if: runner.os != 'Windows'
+      shell: bash
+      env:
+        MESON_JLL_VERSION: "0.1.1"
+      run: |
+        set -euo pipefail
+
+        case "${RUNNER_OS}-${RUNNER_ARCH}" in
+          Linux-X64) meson_jll_triple="x86_64-unknown-linux-musl" ;;
+          macOS-ARM64) meson_jll_triple="aarch64-apple-darwin" ;;
+          macOS-X64) meson_jll_triple="x86_64-apple-darwin" ;;
+          *)
+            echo "No meson-jll binary exists for ${RUNNER_OS}-${RUNNER_ARCH}." >&2
+            exit 1
+            ;;
+        esac
+
+        # The cyipopt build calls pkg-config, which the runner images do not always provide.
+        if [[ "${RUNNER_OS}" == "Linux" ]]; then
+          dnf install -y pkgconf-pkg-config
+        else
+          command -v pkg-config >/dev/null || brew install pkgconf
+        fi
+        python -m pip install --upgrade meson ninja
+
+        meson_jll_directory="${RUNNER_TEMP}/meson-jll"
+        mkdir -p "${meson_jll_directory}"
+        curl --fail --location --silent --show-error \
+          --output "${meson_jll_directory}/meson-jll.tar.gz" \
+          "https://github.com/nardi/meson-jll/releases/download/v${MESON_JLL_VERSION}/meson-jll-${meson_jll_triple}.tar.gz"
+        tar -xzf "${meson_jll_directory}/meson-jll.tar.gz" -C "${meson_jll_directory}"
+        chmod +x "${meson_jll_directory}/meson-jll"
+
+        # The project has no sources. It only makes Meson fetch the JLL wraps.
+        fetch_directory="${RUNNER_TEMP}/ipopt-fetch"
+        mkdir -p "${fetch_directory}"
+        printf '%s\n' \
+          "project('ipopt-fetch', 'c')" \
+          "dependency('Ipopt_jll')" \
+          "dependency('OpenBLAS_jll')" > "${fetch_directory}/meson.build"
+
+        (
+          cd "${fetch_directory}"
+          "${meson_jll_directory}/meson-jll" install Ipopt
+          "${meson_jll_directory}/meson-jll" install OpenBLAS
+          meson setup build --prefix "${RUNNER_TEMP}/ipopt-prefix" --libdir lib
+          meson install -C build
+        )
+
+        # The Ipopt tarball ships a relocatable ipopt.pc that points into its own directory.
+        ipopt_pkgconfig_file="$(find "${fetch_directory}/subprojects" -path '*/lib/pkgconfig/ipopt.pc' | sed -n '1p')"
+        if [[ -z "${ipopt_pkgconfig_file}" ]]; then
+          echo "The fetched Ipopt tarball does not contain lib/pkgconfig/ipopt.pc." >&2
+          exit 1
+        fi
+
+        echo "PKG_CONFIG_PATH=$(dirname "${ipopt_pkgconfig_file}")" >> "${GITHUB_ENV}"
+        echo "IPOPT_PREFIX=${RUNNER_TEMP}/ipopt-prefix" >> "${GITHUB_ENV}"
+        echo "IPOPT_LIBRARY_PREFIX=${RUNNER_TEMP}/ipopt-prefix" >> "${GITHUB_ENV}"
+
+    # Windows still takes Ipopt from conda-forge. The MinGW DLLs of the Julia
+    # binary builders need import libraries before MSVC can link against them.
     - name: Install Ipopt from conda-forge
+      if: runner.os == 'Windows'
       shell: bash
       run: |
         set -euo pipefail
 
-        if [[ "${RUNNER_OS}" == "Windows" ]]; then
-          micromamba_executable="${RUNNER_TEMP}/micromamba.exe"
-          micromamba_asset="micromamba-win-64.exe"
-          # Forward slashes keep the prefix usable by both bash and the Windows tools.
-          ipopt_prefix="$(cygpath -m "${RUNNER_TEMP}/ipopt-env")"
-          library_prefix="${ipopt_prefix}/Library"
-        else
-          micromamba_executable="${RUNNER_TEMP}/micromamba"
-          ipopt_prefix="${RUNNER_TEMP}/ipopt-env"
-          library_prefix="${ipopt_prefix}"
-          if [[ "${RUNNER_OS}" == "macOS" ]]; then
-            if [[ "${RUNNER_ARCH}" == "ARM64" ]]; then
-              micromamba_asset="micromamba-osx-arm64"
-            else
-              micromamba_asset="micromamba-osx-64"
-            fi
-          else
-            micromamba_asset="micromamba-linux-64"
-          fi
-        fi
+        micromamba_executable="${RUNNER_TEMP}/micromamba.exe"
+        # Forward slashes keep the prefix usable by both bash and the Windows tools.
+        ipopt_prefix="$(cygpath -m "${RUNNER_TEMP}/ipopt-env")"
+        library_prefix="${ipopt_prefix}/Library"
 
         curl --fail --location --silent --show-error \
           --output "${micromamba_executable}" \
-          "https://github.com/mamba-org/micromamba-releases/releases/latest/download/${micromamba_asset}"
+          "https://github.com/mamba-org/micromamba-releases/releases/latest/download/micromamba-win-64.exe"
         chmod +x "${micromamba_executable}"
 
         "${micromamba_executable}" create --yes \
@@ -54,16 +103,16 @@ runs:
         echo "IPOPT_PREFIX=${ipopt_prefix}" >> "${GITHUB_ENV}"
         echo "IPOPT_LIBRARY_PREFIX=${library_prefix}" >> "${GITHUB_ENV}"
 
-    # The deployment target must not be lower than the one the conda-forge
-    # libraries were built for, and the rpath lets delocate find them.
-    # The architecture flags stop the python.org interpreters from building a
-    # universal2 extension, because the conda-forge Ipopt has one architecture.
+    # The deployment target must not be lower than the one the Ipopt libraries
+    # were built for, and the rpath lets delocate find them. The architecture
+    # flags stop the python.org interpreters from building a universal2
+    # extension, because the Ipopt libraries have one architecture.
     - name: Set macOS build flags
       if: runner.os == 'macOS'
       shell: bash
       run: |
         set -euo pipefail
-        # The conda-forge libraries for both architectures require macOS 11.0.
+        # Both architectures target macOS 11.0.
         deployment_target="11.0"
         if [[ "${RUNNER_ARCH}" == "ARM64" ]]; then
           architecture="arm64"
