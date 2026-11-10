@@ -56,6 +56,8 @@ runs:
 
     # The deployment target must not be lower than the one the conda-forge
     # libraries were built for, and the rpath lets delocate find them.
+    # The architecture flags stop the python.org interpreters from building a
+    # universal2 extension, because the conda-forge Ipopt has one architecture.
     - name: Set macOS build flags
       if: runner.os == 'macOS'
       shell: bash
@@ -63,10 +65,14 @@ runs:
         set -euo pipefail
         if [[ "${RUNNER_ARCH}" == "ARM64" ]]; then
           deployment_target="11.0"
+          architecture="arm64"
         else
           deployment_target="10.13"
+          architecture="x86_64"
         fi
         echo "MACOSX_DEPLOYMENT_TARGET=${deployment_target}" >> "${GITHUB_ENV}"
+        echo "_PYTHON_HOST_PLATFORM=macosx-${deployment_target}-${architecture}" >> "${GITHUB_ENV}"
+        echo "ARCHFLAGS=-arch ${architecture}" >> "${GITHUB_ENV}"
         echo "LDFLAGS=-Wl,-rpath,${IPOPT_LIBRARY_PREFIX}/lib" >> "${GITHUB_ENV}"
 
     # Builds from the sdist, so the wheel always links against the Ipopt
@@ -93,7 +99,21 @@ runs:
 
         if [[ "${RUNNER_OS}" == "Linux" ]]; then
           python -m pip install --upgrade auditwheel patchelf
-          LD_LIBRARY_PATH="${IPOPT_LIBRARY_PREFIX}/lib" auditwheel repair \
+          shopt -s nullglob
+          # Prints the newest symbol versions that each library requires.
+          for shared_library in \
+            "${IPOPT_LIBRARY_PREFIX}"/lib/libipopt*.so* \
+            "${IPOPT_LIBRARY_PREFIX}"/lib/libcoin*.so* \
+            "${IPOPT_LIBRARY_PREFIX}"/lib/libgfortran*.so* \
+            "${IPOPT_LIBRARY_PREFIX}"/lib/libstdc++*.so* \
+            "${IPOPT_LIBRARY_PREFIX}"/lib/libgcc_s*.so*; do
+            echo "== ${shared_library}"
+            objdump -T "${shared_library}" | grep -o -E '(GLIBC|GLIBCXX|CXXABI)_[0-9.]+' | sort -uV | paste -sd ' ' || true
+          done
+          for raw_wheel in "${raw_wheel_directory}"/*.whl; do
+            auditwheel show "${raw_wheel}" || true
+          done
+          LD_LIBRARY_PATH="${IPOPT_LIBRARY_PREFIX}/lib" auditwheel -v repair \
             --plat manylinux_2_28_x86_64 \
             --wheel-dir "${repaired_wheel_directory}" \
             "${raw_wheel_directory}"/*.whl
