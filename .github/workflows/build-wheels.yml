@@ -1,0 +1,208 @@
+name: Build cyipopt wheels
+
+on:
+  schedule:
+    # Checks PyPI once a day. The minute avoids the top of the hour, when
+    # scheduled runs are most likely to be delayed.
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "cyipopt version to build. Leave empty for the newest PyPI release."
+        required: false
+        default: ""
+        type: string
+      publish:
+        description: "Create a GitHub release with the wheels."
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+# Runs do not overlap, so two runs never create the same release.
+concurrency:
+  group: build-cyipopt-wheels
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # Decides whether a release for the newest version already exists.
+  resolve:
+    name: Choose the cyipopt version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      build: ${{ steps.resolve.outputs.build }}
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Read the version and check for an existing release
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: python3 scripts/resolve_version.py
+
+  # Builds the Linux wheels inside the manylinux image, so that the wheels
+  # carry the manylinux_2_28 tag and run on older glibc versions.
+  build-linux:
+    name: Build linux-x86_64 py${{ matrix.python }}
+    needs: resolve
+    if: needs.resolve.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    container: quay.io/pypa/manylinux_2_28_x86_64
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      # The manylinux image holds one interpreter per Python version under /opt/python.
+      - name: Put the matching interpreter on PATH
+        env:
+          PYTHON_VERSION: ${{ matrix.python }}
+        run: |
+          python_tag="${PYTHON_VERSION//./}"
+          echo "/opt/python/cp${python_tag}-cp${python_tag}/bin" >> "${GITHUB_PATH}"
+
+      - name: Build the wheel
+        uses: ./.github/actions/build-wheel
+        with:
+          version: ${{ needs.resolve.outputs.version }}
+
+      - name: Upload the wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-linux-x86_64-py${{ matrix.python }}
+          path: ${{ runner.temp }}/repaired-wheels/*.whl
+          if-no-files-found: error
+
+  # Builds the macOS and Windows wheels on hosted runners with setup-python.
+  build-hosted:
+    name: Build ${{ matrix.platform.name }} py${{ matrix.python }}
+    needs: resolve
+    if: needs.resolve.outputs.build == 'true'
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { runner: macos-latest, name: macos-arm64 }
+          - { runner: macos-15-intel, name: macos-x86_64 }
+          - { runner: windows-latest, name: windows-amd64 }
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Build the wheel
+        uses: ./.github/actions/build-wheel
+        with:
+          version: ${{ needs.resolve.outputs.version }}
+
+      - name: Upload the wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.platform.name }}-py${{ matrix.python }}
+          path: ${{ runner.temp }}/repaired-wheels/*.whl
+          if-no-files-found: error
+
+  # Installs each wheel into a new virtual environment on a runner that has no
+  # Ipopt, so the wheel must carry every library it needs.
+  test:
+    name: Test ${{ matrix.platform.name }} py${{ matrix.python }}
+    needs: [resolve, build-linux, build-hosted]
+    if: needs.resolve.outputs.build == 'true'
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { runner: ubuntu-latest, name: linux-x86_64 }
+          - { runner: macos-latest, name: macos-arm64 }
+          - { runner: macos-15-intel, name: macos-x86_64 }
+          - { runner: windows-latest, name: windows-amd64 }
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Download the wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: wheel-${{ matrix.platform.name }}-py${{ matrix.python }}
+          path: downloaded-wheel
+
+      - name: Install the wheel into an empty virtual environment
+        run: |
+          set -euo pipefail
+          python -m venv "${RUNNER_TEMP}/validation-venv"
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            validation_python="${RUNNER_TEMP}/validation-venv/Scripts/python.exe"
+          else
+            validation_python="${RUNNER_TEMP}/validation-venv/bin/python"
+          fi
+          "${validation_python}" -m pip install downloaded-wheel/*.whl
+          echo "VALIDATION_PYTHON=${validation_python}" >> "${GITHUB_ENV}"
+
+      # The script runs from outside the checkout, so only the installed package is imported.
+      - name: Solve a test problem with the installed cyipopt
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}"
+          "${VALIDATION_PYTHON}" "${GITHUB_WORKSPACE}/scripts/smoke_test.py"
+
+  # Creates the GitHub release once every wheel built and passed its test.
+  release:
+    name: Publish ${{ needs.resolve.outputs.tag }}
+    needs: [resolve, build-linux, build-hosted, test]
+    if: needs.resolve.outputs.build == 'true' && (github.event_name == 'schedule' || inputs.publish)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download every wheel
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-*
+          path: wheels
+          merge-multiple: true
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          release_notes="$(printf '%s\n\n%s\n\n%s\n' \
+            "Wheels for cyipopt ${VERSION}, built from its sdist on PyPI." \
+            "Ipopt and its numerical libraries are bundled from conda-forge." \
+            "Each wheel installed and solved a test problem in an empty virtual environment.")"
+          gh release create "${TAG}" wheels/*.whl \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${GITHUB_SHA}" \
+            --title "cyipopt ${VERSION}" \
+            --notes "${release_notes}"

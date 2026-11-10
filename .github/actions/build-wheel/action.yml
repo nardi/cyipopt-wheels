@@ -1,0 +1,119 @@
+name: Build cyipopt wheel
+description: >-
+  Installs Ipopt from conda-forge, builds one cyipopt wheel from its PyPI sdist,
+  and bundles the shared libraries into the wheel. The Python on PATH builds the
+  wheel, so set it up before using this action.
+inputs:
+  version:
+    description: "cyipopt version to build from its sdist on PyPI."
+    required: true
+runs:
+  using: composite
+  steps:
+    # Installs Ipopt and pkg-config into a prefix of their own, so that the
+    # build links against conda-forge libraries and not against system files.
+    - name: Install Ipopt from conda-forge
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        if [[ "${RUNNER_OS}" == "Windows" ]]; then
+          micromamba_executable="${RUNNER_TEMP}/micromamba.exe"
+          micromamba_asset="micromamba-win-64.exe"
+          # Forward slashes keep the prefix usable by both bash and the Windows tools.
+          ipopt_prefix="$(cygpath -m "${RUNNER_TEMP}/ipopt-env")"
+          library_prefix="${ipopt_prefix}/Library"
+        else
+          micromamba_executable="${RUNNER_TEMP}/micromamba"
+          ipopt_prefix="${RUNNER_TEMP}/ipopt-env"
+          library_prefix="${ipopt_prefix}"
+          if [[ "${RUNNER_OS}" == "macOS" ]]; then
+            if [[ "${RUNNER_ARCH}" == "ARM64" ]]; then
+              micromamba_asset="micromamba-osx-arm64"
+            else
+              micromamba_asset="micromamba-osx-64"
+            fi
+          else
+            micromamba_asset="micromamba-linux-64"
+          fi
+        fi
+
+        curl --fail --location --silent --show-error \
+          --output "${micromamba_executable}" \
+          "https://github.com/mamba-org/micromamba-releases/releases/latest/download/${micromamba_asset}"
+        chmod +x "${micromamba_executable}"
+
+        "${micromamba_executable}" create --yes \
+          --root-prefix "${RUNNER_TEMP}/micromamba-root" \
+          --prefix "${ipopt_prefix}" \
+          --channel conda-forge --override-channels \
+          ipopt pkg-config
+
+        echo "PKG_CONFIG_PATH=${library_prefix}/lib/pkgconfig" >> "${GITHUB_ENV}"
+        echo "${library_prefix}/bin" >> "${GITHUB_PATH}"
+        echo "IPOPT_PREFIX=${ipopt_prefix}" >> "${GITHUB_ENV}"
+        echo "IPOPT_LIBRARY_PREFIX=${library_prefix}" >> "${GITHUB_ENV}"
+
+    # The deployment target must not be lower than the one the conda-forge
+    # libraries were built for, and the rpath lets delocate find them.
+    - name: Set macOS build flags
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ "${RUNNER_ARCH}" == "ARM64" ]]; then
+          deployment_target="11.0"
+        else
+          deployment_target="10.13"
+        fi
+        echo "MACOSX_DEPLOYMENT_TARGET=${deployment_target}" >> "${GITHUB_ENV}"
+        echo "LDFLAGS=-Wl,-rpath,${IPOPT_LIBRARY_PREFIX}/lib" >> "${GITHUB_ENV}"
+
+    # Builds from the sdist, so the wheel always links against the Ipopt
+    # installed above and never against a binary wheel from PyPI.
+    - name: Build the cyipopt wheel from its sdist
+      shell: bash
+      env:
+        CYIPOPT_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        python -m pip wheel --no-deps --no-binary cyipopt \
+          --wheel-dir "${RUNNER_TEMP}/raw-wheels" \
+          "cyipopt==${CYIPOPT_VERSION}"
+        ls -l "${RUNNER_TEMP}/raw-wheels"
+
+    # Copies the Ipopt shared libraries into the wheel and retags it for the
+    # platform. Each tool gets the library locations it needs to resolve them.
+    - name: Bundle the shared libraries into the wheel
+      shell: bash
+      run: |
+        set -euo pipefail
+        repaired_wheel_directory="${RUNNER_TEMP}/repaired-wheels"
+        raw_wheel_directory="${RUNNER_TEMP}/raw-wheels"
+
+        if [[ "${RUNNER_OS}" == "Linux" ]]; then
+          python -m pip install --upgrade auditwheel patchelf
+          LD_LIBRARY_PATH="${IPOPT_LIBRARY_PREFIX}/lib" auditwheel repair \
+            --plat manylinux_2_28_x86_64 \
+            --wheel-dir "${repaired_wheel_directory}" \
+            "${raw_wheel_directory}"/*.whl
+        elif [[ "${RUNNER_OS}" == "macOS" ]]; then
+          if [[ "${RUNNER_ARCH}" == "ARM64" ]]; then
+            architecture="arm64"
+          else
+            architecture="x86_64"
+          fi
+          python -m pip install --upgrade delocate
+          delocate-wheel --require-archs "${architecture}" \
+            --wheel-dir "${repaired_wheel_directory}" \
+            -v "${raw_wheel_directory}"/*.whl
+        else
+          python -m pip install --upgrade delvewheel
+          delvewheel repair \
+            --add-path "$(cygpath -w "${IPOPT_LIBRARY_PREFIX}/bin")" \
+            --wheel-dir "${repaired_wheel_directory}" \
+            "${raw_wheel_directory}"/*.whl
+        fi
+
+        # The listing shows which libraries the wheel carries.
+        python -m zipfile -l "${repaired_wheel_directory}"/*.whl
