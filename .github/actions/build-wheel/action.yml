@@ -137,3 +137,23 @@ runs:
 
         # The listing shows which libraries the wheel carries.
         python -m zipfile -l "${repaired_wheel_directory}"/*.whl
+
+    # Shows which libraries each binary of the repaired wheel links against, so
+    # a missing library appears in this log before the test job runs.
+    - name: Inspect the libraries that the wheel links against
+      if: runner.os != 'Linux'
+      shell: bash
+      run: |
+        set -euo pipefail
+        extracted_wheel_directory="$(mktemp -d)"
+        python -m zipfile -e "${RUNNER_TEMP}/repaired-wheels"/*.whl "${extracted_wheel_directory}"
+        if [[ "${RUNNER_OS}" == "macOS" ]]; then
+          for binary in "${extracted_wheel_directory}"/cyipopt/.dylibs/*.dylib "${extracted_wheel_directory}"/cyipopt/*.so; do
+            echo "== ${binary#"${extracted_wheel_directory}"/}"
+            otool -L "${binary}"
+          done
+          ls -l "${IPOPT_LIBRARY_PREFIX}/lib" | grep -E "blas|lapack" || true
+        else
+          python "${GITHUB_WORKSPACE}/scripts/list_binary_dependencies.py" "${extracted_wheel_directory}"
+          ls -l "${IPOPT_LIBRARY_PREFIX}/bin" | grep -i "dll" || true
+        fi

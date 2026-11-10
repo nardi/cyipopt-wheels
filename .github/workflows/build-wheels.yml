@@ -176,7 +176,7 @@ jobs:
 
   # Creates the GitHub release once every wheel built and passed its test.
   release:
-    name: Publish ${{ needs.resolve.outputs.tag }}
+    name: Publish release
     needs: [resolve, build-linux, build-hosted, test]
     if: needs.resolve.outputs.build == 'true' && (github.event_name == 'schedule' || inputs.publish)
     runs-on: ubuntu-latest
