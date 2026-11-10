@@ -79,6 +79,20 @@ runs:
         echo "IPOPT_PREFIX=${RUNNER_TEMP}/ipopt-prefix" >> "${GITHUB_ENV}"
         echo "IPOPT_LIBRARY_PREFIX=${RUNNER_TEMP}/ipopt-prefix" >> "${GITHUB_ENV}"
 
+        openblas_library="$(find "${RUNNER_TEMP}/ipopt-prefix/lib" -name 'libopenblas*' | sed -n '1p')"
+        if [[ -z "${openblas_library}" ]]; then
+          echo "The fetched OpenBLAS tarball did not install a library." >&2
+          exit 1
+        fi
+        echo "OPENBLAS_LIBRARY=${openblas_library}" >> "${GITHUB_ENV}"
+
+        # The x86_64 macOS libgcc_s is a re-export stub that the prune step does not
+        # follow, so the real library is copied under the name that libdmumps asks for.
+        if [[ "${RUNNER_OS}" == "macOS" && "${RUNNER_ARCH}" == "X64" ]]; then
+          gcc_s_library="$(find "${fetch_directory}/subprojects" -name 'libgcc_s.1.1.dylib' | sed -n '1p')"
+          cp "${gcc_s_library}" "${RUNNER_TEMP}/ipopt-prefix/lib/libgcc_s.1.dylib"
+        fi
+
     # Windows still takes Ipopt from conda-forge. The MinGW DLLs of the Julia
     # binary builders need import libraries before MSVC can link against them.
     - name: Install Ipopt from conda-forge
@@ -127,19 +141,39 @@ runs:
         echo "MACOSX_DEPLOYMENT_TARGET=${deployment_target}" >> "${GITHUB_ENV}"
         echo "_PYTHON_HOST_PLATFORM=macosx-${deployment_target}-${architecture}" >> "${GITHUB_ENV}"
         echo "ARCHFLAGS=-arch ${architecture}" >> "${GITHUB_ENV}"
-        echo "LDFLAGS=-Wl,-rpath,${IPOPT_LIBRARY_PREFIX}/lib" >> "${GITHUB_ENV}"
+        echo "LDFLAGS=-Wl,-rpath,${IPOPT_LIBRARY_PREFIX}/lib ${OPENBLAS_LIBRARY}" >> "${GITHUB_ENV}"
+
+    # The extension links against OpenBLAS so that the repair tool bundles it. The
+    # link keeps the dependency even though no symbol is taken from OpenBLAS.
+    - name: Set Linux build flags
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "LDFLAGS=-Wl,--no-as-needed ${OPENBLAS_LIBRARY} -Wl,--as-needed" >> "${GITHUB_ENV}"
 
     # Builds from the sdist, so the wheel always links against the Ipopt
-    # installed above and never against a binary wheel from PyPI.
+    # installed above and never against a binary wheel from PyPI. On Linux and
+    # macOS the sdist also gets the BLAS forwarding that Ipopt needs.
     - name: Build the cyipopt wheel from its sdist
       shell: bash
       env:
         CYIPOPT_VERSION: ${{ inputs.version }}
       run: |
         set -euo pipefail
-        python -m pip wheel --no-deps --no-binary cyipopt \
-          --wheel-dir "${RUNNER_TEMP}/raw-wheels" \
+        sdist_directory="${RUNNER_TEMP}/cyipopt-sdist"
+        python -m pip download --no-deps --no-binary :all: \
+          --dest "${sdist_directory}" \
           "cyipopt==${CYIPOPT_VERSION}"
+        tar -xzf "${sdist_directory}/cyipopt-${CYIPOPT_VERSION}.tar.gz" -C "${sdist_directory}"
+        source_directory="${sdist_directory}/cyipopt-${CYIPOPT_VERSION}"
+        if [[ "${RUNNER_OS}" != "Windows" ]]; then
+          python "${GITHUB_WORKSPACE}/scripts/forward_blas_to_openblas.py" \
+            "${source_directory}/cyipopt/__init__.py"
+        fi
+        python -m pip wheel --no-deps \
+          --wheel-dir "${RUNNER_TEMP}/raw-wheels" \
+          "${source_directory}"
         ls -l "${RUNNER_TEMP}/raw-wheels"
 
     # Copies the Ipopt shared libraries into the wheel and retags it for the
