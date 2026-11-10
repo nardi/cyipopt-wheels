@@ -63,11 +63,11 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
+        # The conda-forge libraries for both architectures require macOS 11.0.
+        deployment_target="11.0"
         if [[ "${RUNNER_ARCH}" == "ARM64" ]]; then
-          deployment_target="11.0"
           architecture="arm64"
         else
-          deployment_target="10.13"
           architecture="x86_64"
         fi
         echo "MACOSX_DEPLOYMENT_TARGET=${deployment_target}" >> "${GITHUB_ENV}"
