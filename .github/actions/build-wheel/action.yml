@@ -134,10 +134,11 @@ runs:
             --wheel-dir "${repaired_wheel_directory}" \
             -v "${raw_wheel_directory}"/*.whl
         else
-          python -m pip install --upgrade delvewheel
-          delvewheel repair \
-            --wheel-dir "${repaired_wheel_directory}" \
-            "${raw_wheel_directory}"/*.whl
+          # delvewheel cannot see the DLLs that meson-python keeps in `.cyipopt.mesonpy.libs`,
+          # and those DLLs already carry the JLL libraries. The wheel is kept as it is, and the
+          # test job checks that every DLL loads in a clean environment.
+          mkdir -p "${repaired_wheel_directory}"
+          cp "${raw_wheel_directory}"/*.whl "${repaired_wheel_directory}/"
         fi
 
         # The listing shows which libraries the wheel carries.
