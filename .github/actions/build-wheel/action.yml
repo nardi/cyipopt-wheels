@@ -65,10 +65,22 @@ runs:
       run: |
         set -euo pipefail
 
+        # The URL comes from the PyPI JSON API. `pip download` would prepare the metadata of the
+        # original setuptools build, and `--no-binary :all:` would build the build tools from source.
         sdist_directory="${RUNNER_TEMP}/cyipopt-sdist"
-        python -m pip download --no-deps --no-binary :all: \
-          --dest "${sdist_directory}" \
-          "cyipopt==${CYIPOPT_VERSION}"
+        mkdir -p "${sdist_directory}"
+        sdist_url="$(python -c '
+        import json
+        import sys
+        import urllib.request
+
+        with urllib.request.urlopen(f"https://pypi.org/pypi/cyipopt/{sys.argv[1]}/json", timeout=60) as response:
+            release = json.load(response)
+        print(next(file["url"] for file in release["urls"] if file["packagetype"] == "sdist"))
+        ' "${CYIPOPT_VERSION}")"
+        curl --fail --location --silent --show-error \
+          --output "${sdist_directory}/cyipopt-${CYIPOPT_VERSION}.tar.gz" \
+          "${sdist_url}"
         tar -xzf "${sdist_directory}/cyipopt-${CYIPOPT_VERSION}.tar.gz" -C "${sdist_directory}"
         source_directory="${sdist_directory}/cyipopt-${CYIPOPT_VERSION}"
         echo "CYIPOPT_SOURCE_DIRECTORY=${source_directory}" >> "${GITHUB_ENV}"
