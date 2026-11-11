@@ -99,7 +99,6 @@ jobs:
       matrix:
         platform:
           - { runner: macos-latest, name: macos-arm64 }
-          - { runner: macos-15-intel, name: macos-x86_64 }
           - { runner: windows-latest, name: windows-amd64 }
         python: ["3.11", "3.12", "3.13"]
     steps:
@@ -128,7 +127,7 @@ jobs:
   test:
     name: Test ${{ matrix.platform.name }} py${{ matrix.python }}
     needs: [resolve, build-linux, build-hosted]
-    if: always() && needs.resolve.outputs.build == 'true'
+    if: needs.resolve.outputs.build == 'true'
     runs-on: ${{ matrix.platform.runner }}
     timeout-minutes: 30
     strategy:
@@ -137,7 +136,6 @@ jobs:
         platform:
           - { runner: ubuntu-latest, name: linux-x86_64 }
           - { runner: macos-latest, name: macos-arm64 }
-          - { runner: macos-15-intel, name: macos-x86_64 }
           - { runner: windows-latest, name: windows-amd64 }
         python: ["3.11", "3.12", "3.13"]
     steps:
@@ -199,7 +197,7 @@ jobs:
           set -euo pipefail
           release_notes="$(printf '%s\n\n%s\n\n%s\n' \
             "Wheels for cyipopt ${VERSION}, built from its sdist on PyPI." \
-            "Ipopt and its numerical libraries are bundled from conda-forge." \
+            "Ipopt and its numerical libraries come from the Julia binary builders." \
             "Each wheel installed and solved a test problem in an empty virtual environment.")"
           gh release create "${TAG}" wheels/*.whl \
             --repo "${GITHUB_REPOSITORY}" \

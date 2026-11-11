@@ -1,0 +1,27 @@
+[build-system]
+requires = [
+    "meson-python>=0.18",
+    "meson>=1.8",
+    "ninja>=1.11",
+    "cython>=3.0",
+    "numpy>=1.25",
+    "patchelf; sys_platform == 'linux'",
+]
+build-backend = "mesonpy"
+
+[project]
+name = "cyipopt"
+version = "1.7.0"
+description = "A Cython wrapper to the IPOPT optimization package"
+requires-python = ">=3.11"
+dependencies = ["numpy>=1.26.4"]
+
+[tool.meson-python]
+# Windows has no run path, so the bundled DLLs stay inside the wheel and the package adds their
+# directory to the DLL search path on import.
+allow-windows-internal-shared-libs = true
+
+[tool.meson-python.args]
+# `--vsenv` activates the Visual Studio tools that the JLL import libraries need on Windows, and
+# does nothing elsewhere. Stripping removes the debug information that the JLL libraries ship with.
+setup = ["--vsenv", "-Dstrip=true"]

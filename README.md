@@ -14,7 +14,7 @@ Each release holds one wheel per Python version and platform:
 
 - Python 3.11, 3.12, and 3.13
 - Linux x86_64, tagged `manylinux_2_28`
-- macOS arm64 and macOS x86_64
+- macOS arm64 (Apple silicon)
 - Windows AMD64
 
 Install a wheel with pip by passing the URL of the wheel for your Python
@@ -26,13 +26,11 @@ python -m pip install https://github.com/nardi/cyipopt-wheels/releases/download/
 
 ## Build steps
 
-Each build installs Ipopt and pkg-config from conda-forge with micromamba. It
-then builds the cyipopt sdist from PyPI with `pip wheel`, so the wheel links
-against the conda-forge Ipopt.
-
-After the build, the shared libraries go into the wheel. `auditwheel` handles
-Linux, `delocate` handles macOS, and `delvewheel` handles Windows. The Linux
-wheels are built inside the `manylinux_2_28` image.
+Each build downloads the sdist of the cyipopt release from PyPI and writes the Ipopt and
+OpenBLAS wraps with `meson-jll`. The binaries come from the Julia binary builders, and
+`meson-python` compiles the extension against them. The repair tool then bundles the shared
+libraries into the wheel: `auditwheel` on Linux, `delocate` on macOS and `delvewheel` on
+Windows. The Linux wheels are built inside the `manylinux_2_28` image.
 
 ## Schedule and manual runs
 

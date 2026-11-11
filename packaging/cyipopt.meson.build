@@ -1,0 +1,29 @@
+python.install_sources(
+  '__init__.py',
+  'exceptions.py',
+  'scipy_interface.py',
+  'utils.py',
+  'version.py',
+  subdir: 'cyipopt',
+)
+
+# Cython translates the module to C. The declarations of Ipopt sit next to the `.pyx` file in
+# `cython/`, where Cython finds them.
+wrapper_source = custom_target(
+  'ipopt_wrapper.c',
+  input: 'cython/ipopt_wrapper.pyx',
+  output: 'ipopt_wrapper.c',
+  depend_files: files('cython/ipopt.pxd'),
+  command: [
+    cython, '-3', '--module-name', 'cyipopt.ipopt_wrapper',
+    '-o', '@OUTPUT@', '@INPUT@',
+  ],
+)
+
+python.extension_module(
+  'ipopt_wrapper',
+  wrapper_source,
+  dependencies: [ipopt, openblas, lbt, numpy, python.dependency()],
+  subdir: 'cyipopt',
+  install: true,
+)
