@@ -6,6 +6,7 @@ project(
   default_options: ['c_std=c11', 'buildtype=release', 'b_ndebug=if-release'],
 )
 
+fs = import('fs')
 python = import('python').find_installation(pure: false)
 cython = find_program('cython')
 
@@ -25,5 +26,15 @@ numpy_include = run_command(
   python, '-c', 'import numpy; print(numpy.get_include())', check: true,
 ).stdout().strip()
 numpy = declare_dependency(compile_args: ['-I' + numpy_include])
+
+# The header that cyipopt includes as `IpStdCInterface.h` sits in `include/coin-or` of the Ipopt
+# tarball, and the wrap does not put that directory on the include path. The wrap is extracted by
+# now, because the dependency above has been resolved, so the directory is found and passed on.
+ipopt_header = run_command(
+  python, '-c', 'import glob, sys; print(glob.glob(sys.argv[1], recursive=True)[0])',
+  meson.project_source_root() / 'subprojects' / '**' / 'coin-or' / 'IpStdCInterface.h',
+  check: true,
+).stdout().strip()
+ipopt_headers = declare_dependency(compile_args: ['-I' + fs.parent(ipopt_header)])
 
 subdir('cyipopt')

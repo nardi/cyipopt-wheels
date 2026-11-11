@@ -23,5 +23,5 @@ allow-windows-internal-shared-libs = true
 
 [tool.meson-python.args]
 # `--vsenv` activates the Visual Studio tools that the JLL import libraries need on Windows, and
-# does nothing elsewhere. Stripping removes the debug information that the JLL libraries ship with.
-setup = ["--vsenv", "-Dstrip=true"]
+# does nothing elsewhere.
+setup = ["--vsenv"]

@@ -81,7 +81,8 @@ runs:
         curl --fail --location --silent --show-error \
           --output "${sdist_directory}/cyipopt-${CYIPOPT_VERSION}.tar.gz" \
           "${sdist_url}"
-        tar -xzf "${sdist_directory}/cyipopt-${CYIPOPT_VERSION}.tar.gz" -C "${sdist_directory}"
+        # Python extracts the archive, because the tar of Windows reads `D:` as a remote host.
+        python -m tarfile -e "${sdist_directory}/cyipopt-${CYIPOPT_VERSION}.tar.gz" "${sdist_directory}"
         source_directory="${sdist_directory}/cyipopt-${CYIPOPT_VERSION}"
         echo "CYIPOPT_SOURCE_DIRECTORY=${source_directory}" >> "${GITHUB_ENV}"
 
