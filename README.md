@@ -26,11 +26,12 @@ python -m pip install https://github.com/nardi/cyipopt-wheels/releases/download/
 
 ## Build steps
 
-Each build downloads the sdist of the cyipopt release from PyPI and writes the Ipopt and
-OpenBLAS wraps with `meson-jll`. The binaries come from the Julia binary builders, and
-`meson-python` compiles the extension against them. The repair tool then bundles the shared
-libraries into the wheel: `auditwheel` on Linux, `delocate` on macOS and `delvewheel` on
-Windows. The Linux wheels are built inside the `manylinux_2_28` image.
+Each build downloads the cyipopt sdist from PyPI, writes the Ipopt and OpenBLAS wraps with
+`meson-jll`, and builds the wheel with `meson-python`. The binaries come from the Julia binary
+builders. On Linux and macOS the repair tool, `auditwheel` or `delocate`, bundles the shared
+libraries that the wheel needs from outside the wheel. The Windows wheel keeps the DLLs that
+`meson-python` bundles, because `delvewheel` cannot see them. The Linux wheels are built inside
+the `manylinux_2_28` image.
 
 ## Schedule and manual runs
 
