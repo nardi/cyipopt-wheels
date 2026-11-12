@@ -12,15 +12,13 @@ cython = find_program('cython')
 
 # The JLL wraps in `subprojects` come from `meson-jll`, which the build writes before Meson
 # parses this file.
-ipopt_jll = dependency('Ipopt_jll')
+ipopt = dependency('Ipopt_jll')
 
 # Ipopt calls BLAS and LAPACK through libblastrampoline, which forwards them to a backend only
-# after one is loaded. The package forwards the bundled OpenBLAS to it on import.
+# after one is loaded. OpenBLAS is linked in so that the extension can forward it on import.
 # OpenBLAS32 has 32-bit integers, which the MUMPS and SPRAL libraries use as well.
-# The package loads both libraries by path, so the extension does not link against them. The
-# calls are still needed, because they make the wraps install the libraries into the wheel.
-dependency('OpenBLAS32_jll')
-dependency('libblastrampoline_jll')
+openblas = dependency('OpenBLAS32_jll')
+lbt = dependency('libblastrampoline_jll')
 
 # The NumPy headers are outside the source tree, and `include_directories` refuses absolute
 # paths, so the directory goes in as a compiler argument.
@@ -38,21 +36,5 @@ ipopt_header = run_command(
   check: true,
 ).stdout().strip()
 ipopt_headers = declare_dependency(compile_args: ['-I' + fs.parent(ipopt_header)])
-
-# The dependency of the wrap links against every library of the Ipopt tarball, which would make
-# the loader require all of them. The extension only calls Ipopt itself, so on Linux and macOS it
-# links against that one library by path. MSVC records only the DLLs whose symbols are used, so
-# Windows keeps the dependency of the wrap, which also provides the import library.
-if host_machine.system() == 'windows'
-  ipopt = ipopt_jll
-else
-  ipopt_library_name = host_machine.system() == 'darwin' ? 'libipopt.dylib' : 'libipopt.so'
-  ipopt_library = run_command(
-    python, '-c', 'import glob, sys; print(glob.glob(sys.argv[1], recursive=True)[0])',
-    meson.project_source_root() / 'subprojects' / '**' / 'lib' / ipopt_library_name,
-    check: true,
-  ).stdout().strip()
-  ipopt = declare_dependency(link_args: [ipopt_library])
-endif
 
 subdir('cyipopt')

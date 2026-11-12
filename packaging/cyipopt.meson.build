@@ -23,7 +23,7 @@ wrapper_source = custom_target(
 python.extension_module(
   'ipopt_wrapper',
   wrapper_source,
-  dependencies: [ipopt, ipopt_headers, numpy, python.dependency()],
+  dependencies: [ipopt, ipopt_headers, openblas, lbt, numpy, python.dependency()],
   subdir: 'cyipopt',
   install: true,
 )
