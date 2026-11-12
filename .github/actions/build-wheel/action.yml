@@ -122,6 +122,20 @@ runs:
           find "${RUNNER_TEMP}/unpacked-wheel" \( -name '*.dylib' -o -name '*.so' \) -exec codesign --force --sign - {} +
           rm "${RUNNER_TEMP}/raw-wheels"/*.whl
           python -m wheel pack --dest-dir "${RUNNER_TEMP}/raw-wheels" "${RUNNER_TEMP}/unpacked-wheel"/cyipopt-*
+        elif [[ "${RUNNER_OS}" == "Linux" ]]; then
+          # Meson strips the debug information of the JLL libraries.
+          python -m pip wheel --no-deps \
+            --config-settings=setup-args=-Dstrip=true \
+            --wheel-dir "${RUNNER_TEMP}/raw-wheels" \
+            "${CYIPOPT_SOURCE_DIRECTORY}"
+
+          # The loader needs only some of the bundled libraries, so the wheel is pruned
+          # before the repair tool sees it.
+          python -m pip install --upgrade wheel patchelf pyelftools
+          python -m wheel unpack --dest "${RUNNER_TEMP}/unpacked-wheel" "${RUNNER_TEMP}/raw-wheels"/*.whl
+          python "${GITHUB_WORKSPACE}/scripts/prune_linux_wheel.py" "${RUNNER_TEMP}/unpacked-wheel"/cyipopt-*
+          rm "${RUNNER_TEMP}/raw-wheels"/*.whl
+          python -m wheel pack --dest-dir "${RUNNER_TEMP}/raw-wheels" "${RUNNER_TEMP}/unpacked-wheel"/cyipopt-*
         else
           # Meson strips the debug information of the JLL libraries.
           python -m pip wheel --no-deps \
