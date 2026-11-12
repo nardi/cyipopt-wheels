@@ -17,6 +17,11 @@ on:
         required: false
         default: true
         type: boolean
+      replace:
+        description: "Rebuild when the release exists, and replace its wheels."
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -48,6 +53,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REQUESTED_VERSION: ${{ inputs.version }}
+          REPLACE_RELEASE: ${{ inputs.replace }}
         run: python3 scripts/resolve_version.py
 
   # Builds the Linux wheels inside the manylinux image, so that the wheels
@@ -188,7 +194,7 @@ jobs:
           path: wheels
           merge-multiple: true
 
-      - name: Create the release
+      - name: Create or update the release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.resolve.outputs.tag }}
@@ -199,8 +205,17 @@ jobs:
             "Wheels for cyipopt ${VERSION}, built from its sdist on PyPI." \
             "Ipopt and its numerical libraries come from the Julia binary builders." \
             "Each wheel installed and solved a test problem in an empty virtual environment.")"
-          gh release create "${TAG}" wheels/*.whl \
-            --repo "${GITHUB_REPOSITORY}" \
-            --target "${GITHUB_SHA}" \
-            --title "cyipopt ${VERSION}" \
-            --notes "${release_notes}"
+          # A release that exists gets its wheels replaced, which the `replace` input asks for.
+          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" > /dev/null 2>&1; then
+            gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name' |
+              while read -r asset_name; do
+                gh release delete-asset "${TAG}" "${asset_name}" --repo "${GITHUB_REPOSITORY}" --yes
+              done
+            gh release upload "${TAG}" wheels/*.whl --repo "${GITHUB_REPOSITORY}"
+          else
+            gh release create "${TAG}" wheels/*.whl \
+              --repo "${GITHUB_REPOSITORY}" \
+              --target "${GITHUB_SHA}" \
+              --title "cyipopt ${VERSION}" \
+              --notes "${release_notes}"
+          fi

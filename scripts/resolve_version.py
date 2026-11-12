@@ -2,7 +2,8 @@
 
 The version is the newest release on PyPI unless `REQUESTED_VERSION` names one.
 The script writes `version`, `tag` and `build` to the file that `GITHUB_OUTPUT`
-names. `build` is `false` when the repository already has a release for the tag.
+names. `build` is `false` when the repository already has a release for the tag, unless
+`REPLACE_RELEASE` is `true`.
 """
 
 import json
@@ -47,9 +48,12 @@ def main() -> None:
 
     version = requested_version or latest_pypi_version()
     tag = f"v{version}"
-    build = not release_exists(repository, tag)
+    replace = os.environ.get("REPLACE_RELEASE", "").strip().lower() == "true"
+    build = replace or not release_exists(repository, tag)
 
-    if build:
+    if replace:
+        print(f"Building cyipopt {version} to replace the wheels of `{tag}`.")
+    elif build:
         print(f"No release `{tag}` in {repository}. Building cyipopt {version}.")
     else:
         print(f"Release `{tag}` already exists in {repository}. Nothing to build.")

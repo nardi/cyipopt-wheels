@@ -107,10 +107,26 @@ runs:
       run: |
         set -euo pipefail
 
-        python -m pip wheel --no-deps \
-          --wheel-dir "${RUNNER_TEMP}/raw-wheels" \
+        # Meson strips the debug information of the JLL libraries on Linux and Windows. The strip
+        # of Xcode rejects the option that Meson passes, so `slim_wheel.py` strips on macOS.
+        strip_arguments=()
+        if [[ "${RUNNER_OS}" == "macOS" ]]; then
+          # Without a target the wheel is tagged for the macOS version of the runner.
+          export MACOSX_DEPLOYMENT_TARGET="11.0"
+        else
+          strip_arguments=(--config-settings=setup-args=-Dstrip=true)
+        fi
+        python -m pip wheel --no-deps "${strip_arguments[@]}" \
+          --wheel-dir "${RUNNER_TEMP}/built-wheels" \
           "${CYIPOPT_SOURCE_DIRECTORY}"
-        ls -l "${RUNNER_TEMP}/raw-wheels"
+
+        # The wheel is unpacked, slimmed and packed again, which also rewrites its file list.
+        python -m pip install --upgrade wheel pefile
+        python -m wheel unpack --dest "${RUNNER_TEMP}/unpacked-wheel" "${RUNNER_TEMP}/built-wheels"/*.whl
+        python "${GITHUB_WORKSPACE}/scripts/slim_wheel.py" "${RUNNER_TEMP}/unpacked-wheel"/cyipopt-*
+        mkdir -p "${RUNNER_TEMP}/raw-wheels"
+        python -m wheel pack --dest-dir "${RUNNER_TEMP}/raw-wheels" "${RUNNER_TEMP}/unpacked-wheel"/cyipopt-*
+        ls -l "${RUNNER_TEMP}/built-wheels" "${RUNNER_TEMP}/raw-wheels"
 
     # The repair tool bundles the libraries that the wheel needs from outside the wheel, and
     # retags the wheel for the platform.
